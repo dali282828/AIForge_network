@@ -1,0 +1,23 @@
+# Ignore virtual environments
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore local files
+.env
+.env.local
+*.log
+
+# Ignore test files
+test_*.py
+*_test.py
+
+# Ignore database files
+*.db
+*.sqlite
+
+# Keep these (needed for deployment) - Don't ignore app, api, requirements, vercel.json
+

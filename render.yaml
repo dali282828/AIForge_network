@@ -1,0 +1,81 @@
+services:
+  - type: web
+    name: aiforge-backend
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 30
+      - key: CORS_ORIGINS
+        value: '["https://aiforge-network-dd7lfpxl0-dalicursor-4767s-projects.vercel.app","http://localhost:5173"]'
+      - key: IPFS_HOST
+        sync: false
+      - key: IPFS_PORT
+        value: 5001
+      - key: IPFS_GATEWAY
+        sync: false
+      - key: IPFS_PROJECT_ID
+        sync: false
+      - key: IPFS_PROJECT_SECRET
+        sync: false
+      - key: MINIO_ENDPOINT
+        sync: false
+      - key: MINIO_ACCESS_KEY
+        sync: false
+      - key: MINIO_SECRET_KEY
+        sync: false
+      - key: MINIO_SECURE
+        value: true
+      - key: PLATFORM_WALLET_ETH
+        sync: false
+      - key: PLATFORM_WALLET_TRON
+        sync: false
+      - key: PLATFORM_FEE_SUBSCRIPTION
+        value: 0.30
+      - key: PLATFORM_FEE_JOB
+        value: 0.05
+      - key: PLATFORM_FEE_MODEL
+        value: 0.05
+      - key: PLATFORM_FEE_API
+        value: 0.10
+      - key: MODEL_PUBLISHING_FEE
+        value: 5.00
+      - key: MODEL_LISTING_FEE
+        value: 2.00
+      - key: MODEL_LISTING_GRACE_PERIOD_DAYS
+        value: 7
+      - key: ADMIN_WALLETS
+        sync: false
+      - key: ETH_RPC_URL
+        sync: false
+      - key: TRON_RPC_URL
+        value: https://api.trongrid.io
+      - key: ETH_REQUIRED_CONFIRMATIONS
+        value: 3
+      - key: TRON_REQUIRED_CONFIRMATIONS
+        value: 19
+      - key: USDT_ETH_CONTRACT
+        value: 0xdAC17F958D2ee523a2206206994597C13D831ec7
+      - key: USDT_TRON_CONTRACT
+        value: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+      - key: NFT_CONTRACT_TRON
+        value: ""
+      - key: NFT_MINT_GAS_FEE
+        value: 0.10
+      - key: NFT_REWARD_SUBSCRIPTION_PERCENT
+        value: 0.30
+      - key: NFT_REWARD_API_PERCENT
+        value: 0.10
+
