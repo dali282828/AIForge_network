@@ -41,6 +41,7 @@ jobs:
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL || 'https://aiforge-backend.fly.dev/api' }}
           GITHUB_PAGES: 'true'
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: npm run build
 
       - name: Setup Pages
