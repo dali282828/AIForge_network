@@ -44,15 +44,31 @@ export default function Wallets() {
       const tronWeb = (window as any).tronWeb
       
       // Request account access
-      const accounts = await tronWeb.request({
+      const accountsResponse = await tronWeb.request({
         method: 'tron_requestAccounts'
       })
 
-      if (!accounts || accounts.length === 0) {
-        throw new Error('No accounts found')
+      // Extract address - handle different response formats
+      let address: string | undefined
+      
+      if (Array.isArray(accountsResponse)) {
+        address = accountsResponse[0]
+      } else if (accountsResponse && typeof accountsResponse === 'object') {
+        if (tronWeb.defaultAddress && tronWeb.defaultAddress.base58) {
+          address = tronWeb.defaultAddress.base58
+        } else if (tronWeb.address) {
+          address = tronWeb.address
+        } else if (accountsResponse.data && Array.isArray(accountsResponse.data)) {
+          address = accountsResponse.data[0]
+        }
       }
-
-      const address = accounts[0]
+      
+      // Validate and normalize address
+      if (!address || typeof address !== 'string' || address.trim() === '') {
+        throw new Error('Invalid wallet address. Please make sure TronLink is unlocked and has an account selected.')
+      }
+      
+      address = address.trim()
 
       // Get auth message
       const messageResponse = await api.get('/auth/wallet/auth-message', {
@@ -62,13 +78,47 @@ export default function Wallets() {
         }
       })
 
-      const message = messageResponse.data.message
+      // Ensure message is a string
+      let message = messageResponse.data.message
+      if (!message || typeof message !== 'string') {
+        throw new Error('Invalid message received from server. Please try again.')
+      }
+      
+      // Trim and validate message
+      message = String(message).trim()
+      if (message.length === 0) {
+        throw new Error('Empty message received. Please try again.')
+      }
 
-      // Sign message
-      const signedMessage = await tronWeb.trx.signMessage(message)
-      const signature = signedMessage
+      // Sign message - TronLink signMessage requires hex-encoded message
+      let signature: string
+      
+      // Convert message to hex format (TronLink requirement)
+      // Ensure it's a proper string
+      const messageBytes = Array.from(new TextEncoder().encode(String(message)))
+      const messageHex = String(messageBytes.map(b => b.toString(16).padStart(2, '0')).join(''))
+      
+      // Validate hex string
+      if (!messageHex || typeof messageHex !== 'string' || messageHex.length === 0) {
+        throw new Error('Failed to convert message to hex format')
+      }
+      
+      try {
+        // Method 1: Use tronWeb.trx.sign with hex message (most reliable)
+        if (tronWeb.trx && typeof tronWeb.trx.sign === 'function') {
+          signature = await tronWeb.trx.sign(messageHex)
+        } else if (tronWeb.trx && typeof tronWeb.trx.signMessage === 'function') {
+          // Fallback to signMessage
+          signature = await tronWeb.trx.signMessage(messageHex)
+        } else {
+          throw new Error('TronLink sign methods not available')
+        }
+      } catch (signError: any) {
+        console.error('Signing failed:', signError)
+        throw new Error(`Failed to sign message: ${signError.message}. Please make sure TronLink is unlocked and try again.`)
+      }
 
-      // Login/Connect wallet
+      // Login/Connect wallet - use normalized address consistently
       const loginResponse = await api.post('/auth/wallet/login', {
         wallet_address: address,
         network: 'tron',
@@ -83,10 +133,12 @@ export default function Wallets() {
         const { useAuthStore } = await import('../store/authStore')
         useAuthStore.getState().setToken(loginResponse.data.access_token)
         
-        // Show admin status if applicable
+        // Set admin status if applicable
         if (loginResponse.data.is_admin) {
+          useAuthStore.getState().setAdminStatus(true)
           alert('Wallet connected successfully! Admin access granted.')
         } else {
+          useAuthStore.getState().setAdminStatus(false)
           alert('Wallet connected successfully!')
         }
       }
@@ -104,7 +156,18 @@ export default function Wallets() {
     try {
       // Get verification message
       const messageResponse = await api.get(`/wallets/verification-message/${walletId}`)
-      const message = messageResponse.data.message
+      
+      // Ensure message is a string
+      let message = messageResponse.data.message
+      if (!message || typeof message !== 'string') {
+        throw new Error('Invalid message received from server. Please try again.')
+      }
+      
+      // Trim and validate message
+      message = String(message).trim()
+      if (message.length === 0) {
+        throw new Error('Empty message received. Please try again.')
+      }
 
       // Check TronLink
       if (typeof window === 'undefined' || !(window as any).tronWeb) {
@@ -113,8 +176,34 @@ export default function Wallets() {
       }
 
       const tronWeb = (window as any).tronWeb
-      const signedMessage = await tronWeb.trx.signMessage(message)
-      const signature = signedMessage
+      
+      // Sign message - TronLink signMessage requires hex-encoded message
+      let signature: string
+      
+      // Convert message to hex format (TronLink requirement)
+      // Ensure it's a proper string
+      const messageBytes = Array.from(new TextEncoder().encode(String(message)))
+      const messageHex = String(messageBytes.map(b => b.toString(16).padStart(2, '0')).join(''))
+      
+      // Validate hex string
+      if (!messageHex || typeof messageHex !== 'string' || messageHex.length === 0) {
+        throw new Error('Failed to convert message to hex format')
+      }
+      
+      try {
+        // Method 1: Use tronWeb.trx.sign with hex message (most reliable)
+        if (tronWeb.trx && typeof tronWeb.trx.sign === 'function') {
+          signature = await tronWeb.trx.sign(messageHex)
+        } else if (tronWeb.trx && typeof tronWeb.trx.signMessage === 'function') {
+          // Fallback to signMessage
+          signature = await tronWeb.trx.signMessage(messageHex)
+        } else {
+          throw new Error('TronLink sign methods not available')
+        }
+      } catch (signError: any) {
+        console.error('Signing failed:', signError)
+        throw new Error(`Failed to sign message: ${signError.message}. Please make sure TronLink is unlocked and try again.`)
+      }
 
       // Verify wallet
       await api.post('/wallets/verify', {

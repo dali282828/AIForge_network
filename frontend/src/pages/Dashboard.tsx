@@ -9,6 +9,7 @@ interface DashboardStats {
   models: number
   jobs: number
   subscriptions: number
+  nodes: number
   revenue: string
 }
 
@@ -24,11 +25,12 @@ export default function Dashboard() {
   const loadStats = async () => {
     try {
       // Load user stats from various endpoints
-      const [groupsRes, modelsRes, jobsRes, subscriptionsRes, revenueRes] = await Promise.allSettled([
+      const [groupsRes, modelsRes, jobsRes, subscriptionsRes, nodesRes, revenueRes] = await Promise.allSettled([
         api.get('/groups/my-groups'),
         api.get('/models/my-models'),
-        api.get('/jobs/my-jobs'),
+        api.get('/jobs'),  // Fixed: endpoint is /jobs not /jobs/my-jobs
         api.get('/marketplace/my-subscriptions'),
+        api.get('/nodes/my-nodes'),
         api.get('/revenue/my-earnings')
       ])
 
@@ -37,6 +39,7 @@ export default function Dashboard() {
         models: modelsRes.status === 'fulfilled' ? modelsRes.value.data?.length || 0 : 0,
         jobs: jobsRes.status === 'fulfilled' ? jobsRes.value.data?.length || 0 : 0,
         subscriptions: subscriptionsRes.status === 'fulfilled' ? subscriptionsRes.value.data?.length || 0 : 0,
+        nodes: nodesRes.status === 'fulfilled' ? nodesRes.value.data?.length || 0 : 0,
         revenue: revenueRes.status === 'fulfilled' ? revenueRes.value.data?.total_earnings || '0.00' : '0.00'
       })
     } catch (error) {
@@ -107,6 +110,13 @@ export default function Dashboard() {
       to: '/marketplace'
     },
     {
+      label: 'Nodes',
+      value: stats?.nodes || 0,
+      icon: '🖥️',
+      color: 'indigo',
+      to: '/nodes'
+    },
+    {
       label: 'Total Revenue',
       value: `$${parseFloat(stats?.revenue || '0').toFixed(2)}`,
       icon: '💰',
@@ -129,7 +139,7 @@ export default function Dashboard() {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 mb-8">
           {statCards.map((stat, index) => (
             <Link
               key={index}

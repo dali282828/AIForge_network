@@ -1,5 +1,16 @@
 import api from './client'
 
+export interface WebUIToken {
+  api_key: string
+  api_base_url: string
+  expires_at?: string | null
+}
+
+export const getWebUIToken = async (): Promise<WebUIToken> => {
+  const response = await api.get('/auth/webui-token')
+  return response.data
+}
+
 export interface Conversation {
   id: number
   user_id: number

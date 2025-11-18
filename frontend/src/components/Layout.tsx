@@ -3,7 +3,7 @@ import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 
 export default function Layout() {
-  const { user, logout } = useAuthStore()
+  const { user, logout, isAdmin } = useAuthStore()
   const navigate = useNavigate()
 
   const handleLogout = () => {
@@ -16,17 +16,24 @@ export default function Layout() {
 
   const isActive = (path: string) => location.pathname === path
 
-  const navLinks = [
+  // Base navigation links for all users
+  const baseNavLinks = [
     { to: '/', label: 'Dashboard', icon: '📊' },
     { to: '/groups', label: 'Groups', icon: '👥' },
     { to: '/chat', label: 'Chat', icon: '💬' },
     { to: '/marketplace', label: 'Marketplace', icon: '🛒' },
+    { to: '/nodes', label: 'Nodes', icon: '🖥️' },
+    { to: '/training', label: 'Training', icon: '🎓' },
     { to: '/nft', label: 'NFT', icon: '🎨' },
     { to: '/infrastructure', label: 'Infrastructure', icon: '☁️' },
     { to: '/revenue', label: 'Revenue', icon: '💰' },
     { to: '/wallets', label: 'Wallets', icon: '🔐' },
-    { to: '/admin', label: 'Admin', icon: '⚙️' },
   ]
+
+  // Add admin link only if user is admin
+  const navLinks = isAdmin 
+    ? [...baseNavLinks, { to: '/admin', label: 'Admin', icon: '⚙️' }]
+    : baseNavLinks
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">

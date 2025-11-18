@@ -4,9 +4,13 @@ export interface AdminStats {
   users: { total: number; active: number }
   subscriptions: { total: number; active: number }
   payments: { total: number; confirmed: number; total_revenue: string; platform_fees: string }
-  nodes: { total: number; active: number }
+  nodes: { total: number; active: number; training: number; inference: number }
   jobs: { total: number; completed: number }
   models: { total: number }
+  groups: { total: number; training: number; inference: number; both: number }
+  experiments: { total: number; active: number; runs: number; completed_runs: number; versions: number; tests: number }
+  workspace: { projects: number; active_projects: number; tasks: number; completed_tasks: number }
+  encryption: { total_keys: number }
 }
 
 export interface PaginatedResponse<T> {
@@ -169,6 +173,20 @@ export const adminApi = {
     return response.data
   },
 
+  suspendGroup: async (walletAddress: string, groupId: number) => {
+    const response = await api.patch(`/admin/groups/${groupId}/suspend`, {}, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  activateGroup: async (walletAddress: string, groupId: number) => {
+    const response = await api.patch(`/admin/groups/${groupId}/activate`, {}, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
   deleteGroup: async (walletAddress: string, groupId: number) => {
     const response = await api.delete(`/admin/groups/${groupId}`, {
       headers: getAdminHeaders(walletAddress)
@@ -199,6 +217,20 @@ export const adminApi = {
     return response.data
   },
 
+  approvePublishing: async (walletAddress: string, publishingId: number) => {
+    const response = await api.patch(`/admin/publishing/${publishingId}/approve`, {}, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  rejectPublishing: async (walletAddress: string, publishingId: number, reason?: string) => {
+    const response = await api.patch(`/admin/publishing/${publishingId}/reject`, { reason }, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
   // Revenue & Payouts
   getRevenueDistributions: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
     const response = await api.get('/admin/revenue/distributions', {
@@ -210,6 +242,21 @@ export const adminApi = {
 
   getNFTRewardPools: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
     const response = await api.get('/admin/revenue/nft-pools', {
+      params: { page, page_size: pageSize },
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  triggerRevenueDistribution: async (walletAddress: string, distributionId: number) => {
+    const response = await api.post(`/admin/revenue/distributions/${distributionId}/trigger`, {}, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  getInfrastructurePayouts: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
+    const response = await api.get('/admin/revenue/infrastructure-payouts', {
       params: { page, page_size: pageSize },
       headers: getAdminHeaders(walletAddress)
     })
@@ -306,6 +353,70 @@ export const adminApi = {
       headers: getAdminHeaders(walletAddress)
     })
     return response.data
+  },
+
+  // Experiments
+  getExperiments: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
+    const response = await api.get('/admin/experiments', {
+      params: { page, page_size: pageSize },
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  getExperimentRuns: async (walletAddress: string, experimentId: number) => {
+    const response = await api.get(`/admin/experiments/${experimentId}/runs`, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  getModelVersions: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
+    const response = await api.get('/admin/model-versions', {
+      params: { page, page_size: pageSize },
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  getInferenceTests: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
+    const response = await api.get('/admin/inference-tests', {
+      params: { page, page_size: pageSize },
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  // Workspace
+  getWorkspaceProjects: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
+    const response = await api.get('/admin/workspace/projects', {
+      params: { page, page_size: pageSize },
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  getWorkspaceTasks: async (walletAddress: string, page: number = 1, pageSize: number = 20) => {
+    const response = await api.get('/admin/workspace/tasks', {
+      params: { page, page_size: pageSize },
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  // Encryption Keys
+  getEncryptionKeys: async (walletAddress: string) => {
+    const response = await api.get('/admin/encryption-keys', {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  getGroupEncryptionKey: async (walletAddress: string, groupId: number) => {
+    const response = await api.get(`/admin/encryption-keys/${groupId}`, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
   }
 }
 
@@ -340,6 +451,13 @@ export const systemApi = {
     return response.data
   },
 
+  deleteSetting: async (walletAddress: string, key: string) => {
+    const response = await api.delete(`/system/settings/${key}`, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
   // Feature Flags
   getFeatureFlags: async (walletAddress: string) => {
     const response = await api.get('/system/feature-flags', {
@@ -357,6 +475,13 @@ export const systemApi = {
 
   updateFeatureFlag: async (walletAddress: string, name: string, data: any) => {
     const response = await api.patch(`/system/feature-flags/${name}`, data, {
+      headers: getAdminHeaders(walletAddress)
+    })
+    return response.data
+  },
+
+  deleteFeatureFlag: async (walletAddress: string, name: string) => {
+    const response = await api.delete(`/system/feature-flags/${name}`, {
       headers: getAdminHeaders(walletAddress)
     })
     return response.data

@@ -15,11 +15,13 @@ interface AuthState {
   user: User | null
   token: string | null
   isAuthenticated: boolean
+  isAdmin: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, username: string, password: string, fullName?: string) => Promise<void>
   logout: () => void
   setAuth: (token: string, user: User) => void
   setToken: (token: string) => void
+  setAdminStatus: (isAdmin: boolean) => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -28,6 +30,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       token: null,
       isAuthenticated: false,
+      isAdmin: false,
       login: async (email: string, password: string) => {
         const formData = new URLSearchParams()
         formData.append('username', email)
@@ -68,6 +71,7 @@ export const useAuthStore = create<AuthState>()(
           user: null,
           token: null,
           isAuthenticated: false,
+          isAdmin: false,
         })
       },
       setAuth: (token: string, user: User) => {
@@ -87,14 +91,20 @@ export const useAuthStore = create<AuthState>()(
             token,
             user: userResponse.data,
             isAuthenticated: true,
+            // Admin status is not in /me response, keep existing value or reset to false
+            isAdmin: false,
           })
         } catch (error) {
           // If getting user fails, just set token
           set({
             token,
             isAuthenticated: true,
+            isAdmin: false,
           })
         }
+      },
+      setAdminStatus: (isAdmin: boolean) => {
+        set({ isAdmin })
       },
     }),
     {

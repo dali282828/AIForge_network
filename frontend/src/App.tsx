@@ -14,12 +14,26 @@ import Infrastructure from './pages/Infrastructure'
 import Wallets from './pages/Wallets'
 import Marketplace from './pages/Marketplace'
 import Revenue from './pages/Revenue'
+import Nodes from './pages/Nodes'
+import Training from './pages/Training'
 import Admin from './pages/Admin'
+import Experiments from './pages/Experiments'
 import Layout from './components/Layout'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" />
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isAdmin } = useAuthStore()
+  if (!isAuthenticated) {
+    return <Navigate to="/login" />
+  }
+  if (!isAdmin) {
+    return <Navigate to="/" />
+  }
+  return <>{children}</>
 }
 
 function App() {
@@ -58,7 +72,17 @@ function App() {
           <Route path="infrastructure" element={<Infrastructure />} />
           <Route path="wallets" element={<Wallets />} />
           <Route path="revenue" element={<Revenue />} />
-          <Route path="admin" element={<Admin />} />
+          <Route path="nodes" element={<Nodes />} />
+          <Route path="training" element={<Training />} />
+          <Route path="experiments/:experimentId" element={<Experiments />} />
+          <Route 
+            path="admin" 
+            element={
+              <AdminRoute>
+                <Admin />
+              </AdminRoute>
+            } 
+          />
         </Route>
       </Routes>
     </Router>

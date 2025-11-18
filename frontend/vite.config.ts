@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: process.env.GITHUB_PAGES ? (process.env.GITHUB_REPOSITORY ? `/${process.env.GITHUB_REPOSITORY.split('/')[1]}/` : '/AIForge_network/') : '/',
+  base: '/', // Root base path for Vercel/IPFS deployment
   server: {
     port: 5173,
     proxy: {
@@ -13,6 +13,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
   },
 })
 

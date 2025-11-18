@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import api from '../api/client'
+import { experimentsApi, Experiment, ModelVersion, InferenceTest } from '../api/experiments'
 
 interface Model {
   id: number
@@ -29,12 +30,67 @@ export default function ModelDetail() {
   const [model, setModel] = useState<Model | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  const [activeTab, _setActiveTab] = useState<'overview' | 'experiments' | 'versions' | 'tests'>('overview')
+  
+  // Experiments (reserved for future use)
+  const [_experiments, setExperiments] = useState<Experiment[]>([])
+  const [_loadingExperiments, setLoadingExperiments] = useState(false)
+  
+  // Versions (reserved for future use)
+  const [_versions, setVersions] = useState<ModelVersion[]>([])
+  const [_loadingVersions, setLoadingVersions] = useState(false)
+  
+  // Tests (reserved for future use)
+  const [_tests, setTests] = useState<InferenceTest[]>([])
+  const [_loadingTests, setLoadingTests] = useState(false)
 
   useEffect(() => {
     if (modelId) {
       fetchModel()
+      if (activeTab === 'experiments') fetchExperiments()
+      if (activeTab === 'versions') fetchVersions()
+      if (activeTab === 'tests') fetchTests()
     }
-  }, [modelId])
+  }, [modelId, activeTab])
+  
+  const fetchExperiments = async () => {
+    if (!modelId) return
+    try {
+      setLoadingExperiments(true)
+      const data = await experimentsApi.listExperiments(Number(modelId))
+      setExperiments(data)
+    } catch (err: any) {
+      console.error('Failed to load experiments:', err)
+    } finally {
+      setLoadingExperiments(false)
+    }
+  }
+  
+  const fetchVersions = async () => {
+    if (!modelId) return
+    try {
+      setLoadingVersions(true)
+      const data = await experimentsApi.listVersions(Number(modelId))
+      setVersions(data)
+    } catch (err: any) {
+      console.error('Failed to load versions:', err)
+    } finally {
+      setLoadingVersions(false)
+    }
+  }
+  
+  const fetchTests = async () => {
+    if (!modelId) return
+    try {
+      setLoadingTests(true)
+      const data = await experimentsApi.listTests(Number(modelId))
+      setTests(data)
+    } catch (err: any) {
+      console.error('Failed to load tests:', err)
+    } finally {
+      setLoadingTests(false)
+    }
+  }
 
   const fetchModel = async () => {
     try {

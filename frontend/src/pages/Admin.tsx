@@ -3,7 +3,7 @@ import { adminApi, AdminStats } from '../api/admin'
 import { systemApi } from '../api/admin'
 import api from '../api/client'
 
-type Tab = 'dashboard' | 'users' | 'groups' | 'models' | 'publishing' | 'payments' | 'subscriptions' | 'jobs' | 'nodes' | 'nfts' | 'infrastructure' | 'api-services' | 'revenue' | 'chat' | 'api-usage' | 'wallets' | 'system'
+type Tab = 'dashboard' | 'users' | 'groups' | 'models' | 'publishing' | 'payments' | 'subscriptions' | 'jobs' | 'nodes' | 'nfts' | 'infrastructure' | 'api-services' | 'revenue' | 'chat' | 'api-usage' | 'wallets' | 'system' | 'experiments' | 'workspace' | 'encryption'
 
 export default function Admin() {
   const [walletAddress, setWalletAddress] = useState('')
@@ -44,8 +44,14 @@ export default function Admin() {
           network: 'tron'
         }
       })
-      setIsAdmin(response.data.is_admin)
-      if (response.data.is_admin) {
+      const adminStatus = response.data.is_admin === true
+      setIsAdmin(adminStatus)
+      
+      // Update global admin status in store
+      const { useAuthStore } = await import('../store/authStore')
+      useAuthStore.getState().setAdminStatus(adminStatus)
+      
+      if (adminStatus) {
         loadStats(address)
       }
     } catch (err: any) {
@@ -135,6 +141,18 @@ export default function Admin() {
           const wallets = await adminApi.getAdminWallets(walletAddress)
           setData({ wallets })
           break
+        case 'experiments':
+          const experiments = await adminApi.getExperiments(walletAddress, page, pageSize)
+          setData(experiments)
+          break
+        case 'workspace':
+          const projects = await adminApi.getWorkspaceProjects(walletAddress, page, pageSize)
+          setData(projects)
+          break
+        case 'encryption':
+          const encryptionKeys = await adminApi.getEncryptionKeys(walletAddress)
+          setData(encryptionKeys)
+          break
         case 'system':
           // System settings tab handles its own data loading
           break
@@ -156,20 +174,122 @@ export default function Admin() {
     }
 
     try {
+      setLoading(true)
+      setError('')
+      
       const tronWeb = (window as any).tronWeb
-      const accounts = await tronWeb.request({
+      
+      // Request account access
+      const accountsResponse = await tronWeb.request({
         method: 'tron_requestAccounts'
       })
 
-      if (!accounts || accounts.length === 0) {
-        throw new Error('No accounts found')
+      // Get address from response (handle different response formats)
+      let address: string | undefined
+      
+      if (Array.isArray(accountsResponse)) {
+        address = accountsResponse[0]
+      } else if (accountsResponse && typeof accountsResponse === 'object') {
+        // Response object - get address from tronWeb.defaultAddress
+        if (tronWeb.defaultAddress && tronWeb.defaultAddress.base58) {
+          address = tronWeb.defaultAddress.base58
+        } else if (tronWeb.address) {
+          address = tronWeb.address
+        } else if (accountsResponse.data && Array.isArray(accountsResponse.data)) {
+          address = accountsResponse.data[0]
+        }
       }
 
-      const address = accounts[0]
+      if (!address || typeof address !== 'string' || address.trim() === '') {
+        throw new Error('Invalid wallet address. Please make sure TronLink is unlocked and has an account selected.')
+      }
+
+      address = address.trim()
       setWalletAddress(address)
-      await checkAdminStatus(address)
+
+      // Get auth message
+      const messageResponse = await api.get('/auth/wallet/auth-message', {
+        params: {
+          wallet_address: address,
+          network: 'tron'
+        }
+      })
+
+      // Validate and convert message to string
+      let message = messageResponse.data.message
+      if (!message || typeof message !== 'string') {
+        throw new Error('Invalid message received from server. Please try again.')
+      }
+      message = String(message).trim()
+      
+      if (message.length === 0) {
+        throw new Error('Empty message received. Please try again.')
+      }
+
+      // Sign message - TronLink signMessage requires hex-encoded message
+      let signature: string
+      
+      // Convert message to hex format (TronLink requirement)
+      // Ensure it's a proper string
+      const messageBytes = Array.from(new TextEncoder().encode(String(message)))
+      const messageHex = String(messageBytes.map(b => b.toString(16).padStart(2, '0')).join(''))
+      
+      // Validate hex string
+      if (!messageHex || typeof messageHex !== 'string' || messageHex.length === 0) {
+        throw new Error('Failed to convert message to hex format')
+      }
+      
+      try {
+        // Method 1: Use tronWeb.trx.sign with hex message (most reliable)
+        if (tronWeb.trx && typeof tronWeb.trx.sign === 'function') {
+          signature = await tronWeb.trx.sign(messageHex)
+        } else if (tronWeb.trx && typeof tronWeb.trx.signMessage === 'function') {
+          // Fallback to signMessage
+          signature = await tronWeb.trx.signMessage(messageHex)
+        } else {
+          throw new Error('TronLink sign methods not available')
+        }
+      } catch (signError: any) {
+        console.error('Signing failed:', signError)
+        throw new Error(`Failed to sign message: ${signError.message}. Please make sure TronLink is unlocked and try again.`)
+      }
+
+      // Login/authenticate with wallet
+      const loginResponse = await api.post('/auth/wallet/login', {
+        wallet_address: address,
+        network: 'tron',
+        wallet_type: 'tronlink',
+        signature: signature,
+        message: message
+      })
+
+      // Store token in auth store
+      if (loginResponse.data.access_token) {
+        const { useAuthStore } = await import('../store/authStore')
+        useAuthStore.getState().setToken(loginResponse.data.access_token)
+      }
+
+      // Use is_admin from login response (more reliable than separate API call)
+      const adminStatus = loginResponse.data.is_admin === true
+      setIsAdmin(adminStatus)
+      
+      // Update global admin status in store
+      const { useAuthStore } = await import('../store/authStore')
+      useAuthStore.getState().setAdminStatus(adminStatus)
+      
+      if (adminStatus) {
+        // Load admin stats if admin
+        await loadStats(address)
+      } else {
+        // If not admin from login response, double-check with API
+        // (in case of edge cases)
+        await checkAdminStatus(address)
+      }
     } catch (err: any) {
-      setError(err.message || 'Failed to connect TronLink')
+      console.error('Failed to connect admin wallet:', err)
+      setError(err.response?.data?.detail || err.message || 'Failed to connect admin wallet')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -253,6 +373,8 @@ export default function Admin() {
     { id: 'users', label: 'Users', icon: '👥' },
     { id: 'groups', label: 'Groups', icon: '👨‍👩‍👧‍👦' },
     { id: 'models', label: 'Models', icon: '🤖' },
+    { id: 'experiments', label: 'Experiments', icon: '🔬' },
+    { id: 'workspace', label: 'Workspace', icon: '📁' },
     { id: 'publishing', label: 'Publishing', icon: '📢' },
     { id: 'payments', label: 'Payments', icon: '💳' },
     { id: 'subscriptions', label: 'Subscriptions', icon: '📅' },
@@ -264,6 +386,7 @@ export default function Admin() {
     { id: 'revenue', label: 'Revenue & Payouts', icon: '💰' },
     { id: 'chat', label: 'Chat', icon: '💬' },
     { id: 'api-usage', label: 'API Usage', icon: '📈' },
+    { id: 'encryption', label: 'Encryption Keys', icon: '🔒' },
     { id: 'wallets', label: 'Admin Wallets', icon: '🔐' },
     { id: 'system', label: 'System Settings', icon: '⚙️' }
   ]
@@ -336,12 +459,32 @@ export default function Admin() {
               <div className="bg-white p-6 rounded-lg shadow">
                 <p className="text-sm text-gray-600">Active Nodes</p>
                 <p className="text-3xl font-bold text-gray-900">{stats.nodes.active}</p>
-                <p className="text-xs text-gray-500 mt-1">{stats.nodes.total} total</p>
+                <p className="text-xs text-gray-500 mt-1">{stats.nodes.total} total ({stats.nodes.training} training, {stats.nodes.inference} inference)</p>
               </div>
               <div className="bg-white p-6 rounded-lg shadow">
                 <p className="text-sm text-gray-600">Completed Jobs</p>
                 <p className="text-3xl font-bold text-gray-900">{stats.jobs.completed}</p>
                 <p className="text-xs text-gray-500 mt-1">{stats.jobs.total} total</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <p className="text-sm text-gray-600">Groups</p>
+                <p className="text-3xl font-bold text-gray-900">{stats.groups?.total || 0}</p>
+                <p className="text-xs text-gray-500 mt-1">{stats.groups?.training || 0} training, {stats.groups?.inference || 0} inference, {stats.groups?.both || 0} both</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <p className="text-sm text-gray-600">Experiments</p>
+                <p className="text-3xl font-bold text-gray-900">{stats.experiments?.total || 0}</p>
+                <p className="text-xs text-gray-500 mt-1">{stats.experiments?.active || 0} active, {stats.experiments?.runs || 0} runs, {stats.experiments?.versions || 0} versions</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <p className="text-sm text-gray-600">Workspace</p>
+                <p className="text-3xl font-bold text-gray-900">{stats.workspace?.projects || 0}</p>
+                <p className="text-xs text-gray-500 mt-1">{stats.workspace?.active_projects || 0} active projects, {stats.workspace?.tasks || 0} tasks</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <p className="text-sm text-gray-600">Encryption Keys</p>
+                <p className="text-3xl font-bold text-gray-900">{stats.encryption?.total_keys || 0}</p>
+                <p className="text-xs text-gray-500 mt-1">Group encryption keys</p>
               </div>
             </div>
           </div>
@@ -409,6 +552,18 @@ export default function Admin() {
 
         {activeTab === 'api-usage' && data && (
           <APIUsageTab walletAddress={walletAddress} data={data} onRefresh={loadTabData} onPageChange={(p) => setPage(p)} />
+        )}
+
+        {activeTab === 'experiments' && data && (
+          <ExperimentsTab walletAddress={walletAddress} data={data} onRefresh={loadTabData} onPageChange={(p) => setPage(p)} />
+        )}
+
+        {activeTab === 'workspace' && data && (
+          <WorkspaceTab walletAddress={walletAddress} data={data} onRefresh={loadTabData} onPageChange={(p) => setPage(p)} />
+        )}
+
+        {activeTab === 'encryption' && data && (
+          <EncryptionTab walletAddress={walletAddress} data={data} onRefresh={loadTabData} />
         )}
 
         {loading && activeTab !== 'system' && (
@@ -981,6 +1136,7 @@ function NodesTab({ walletAddress, data, onRefresh }: { walletAddress: string; d
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Heartbeat</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
@@ -992,6 +1148,15 @@ function NodesTab({ walletAddress, data, onRefresh }: { walletAddress: string; d
                 <tr key={node.id}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{node.id}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{node.name || 'Unnamed'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`px-2 py-1 text-xs rounded-full ${
+                      node.node_type === 'training' ? 'bg-purple-100 text-purple-800' :
+                      node.node_type === 'inference' ? 'bg-blue-100 text-blue-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {node.node_type || 'inference'}
+                    </span>
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`px-2 py-1 text-xs rounded-full ${node.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                       {node.is_active ? 'Active' : 'Inactive'}
@@ -1559,6 +1724,18 @@ function ConfigurationManagement({ walletAddress }: { walletAddress: string }) {
     }
   }
 
+  const handleDelete = async (key: string) => {
+    if (!confirm(`Are you sure you want to delete setting "${key}"?`)) {
+      return
+    }
+    try {
+      await systemApi.deleteSetting(walletAddress, key)
+      loadSettings()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to delete setting')
+    }
+  }
+
   const categories = Array.from(new Set(settings.map(s => s.category)))
 
   return (
@@ -1671,6 +1848,7 @@ function ConfigurationManagement({ walletAddress }: { walletAddress: string }) {
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
             </thead>
@@ -1694,6 +1872,9 @@ function ConfigurationManagement({ walletAddress }: { walletAddress: string }) {
                   <td className="px-4 py-3 text-sm text-gray-500">
                     <span className="px-2 py-1 bg-gray-100 rounded text-xs">{setting.category}</span>
                   </td>
+                  <td className="px-4 py-3 text-sm text-gray-500">
+                    {setting.description || '-'}
+                  </td>
                   <td className="px-4 py-3 text-sm">
                     {editingKey === setting.key ? (
                       <div className="flex space-x-2">
@@ -1711,21 +1892,29 @@ function ConfigurationManagement({ walletAddress }: { walletAddress: string }) {
                         </button>
                       </div>
                     ) : (
-                      <button
-                        onClick={() => {
-                          setEditingKey(setting.key)
-                          setEditValue(setting.value)
-                        }}
-                        className="text-blue-600 hover:text-blue-900"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => {
+                            setEditingKey(setting.key)
+                            setEditValue(setting.value)
+                          }}
+                          className="text-blue-600 hover:text-blue-900"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(setting.key)}
+                          className="text-red-600 hover:text-red-900"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500">
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-500">
                     No settings found
                   </td>
                 </tr>
@@ -1786,6 +1975,18 @@ function FeatureFlagsManagement({ walletAddress }: { walletAddress: string }) {
       loadFlags()
     } catch (err: any) {
       alert(err.response?.data?.detail || 'Failed to create feature flag')
+    }
+  }
+
+  const handleDelete = async (name: string) => {
+    if (!confirm(`Are you sure you want to delete feature flag "${name}"?`)) {
+      return
+    }
+    try {
+      await systemApi.deleteFeatureFlag(walletAddress, name)
+      loadFlags()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to delete feature flag')
     }
   }
 
@@ -1887,6 +2088,12 @@ function FeatureFlagsManagement({ walletAddress }: { walletAddress: string }) {
                       />
                       <span className="text-sm text-gray-500">%</span>
                     </div>
+                    <button
+                      onClick={() => handleDelete(flag.name)}
+                      className="text-red-600 hover:text-red-900 text-sm"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -2169,6 +2376,25 @@ function GroupsTab({ walletAddress, data, onRefresh, onPageChange }: { walletAdd
     }
   }
 
+  const handleSuspend = async (groupId: number) => {
+    if (!confirm('Are you sure you want to suspend this group?')) return
+    try {
+      await adminApi.suspendGroup(walletAddress, groupId)
+      onRefresh()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to suspend group')
+    }
+  }
+
+  const handleActivate = async (groupId: number) => {
+    try {
+      await adminApi.activateGroup(walletAddress, groupId)
+      onRefresh()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to activate group')
+    }
+  }
+
   const handleDelete = async (groupId: number) => {
     if (!confirm('Are you sure you want to delete this group? This action cannot be undone.')) return
     try {
@@ -2195,6 +2421,7 @@ function GroupsTab({ walletAddress, data, onRefresh, onPageChange }: { walletAdd
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Visibility</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Members</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Models</th>
@@ -2208,9 +2435,23 @@ function GroupsTab({ walletAddress, data, onRefresh, onPageChange }: { walletAdd
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{group.id}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{group.name}</td>
                   <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`px-2 py-1 text-xs rounded-full ${
+                      group.group_type === 'training' ? 'bg-purple-100 text-purple-800' :
+                      group.group_type === 'inference' ? 'bg-blue-100 text-blue-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {group.group_type || 'both'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`px-2 py-1 text-xs rounded-full ${group.is_public ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}`}>
                       {group.is_public ? 'Public' : 'Private'}
                     </span>
+                    {group.is_suspended && (
+                      <span className="ml-2 px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">
+                        Suspended
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{group.member_count || 0}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{group.model_count || 0}</td>
@@ -2224,6 +2465,21 @@ function GroupsTab({ walletAddress, data, onRefresh, onPageChange }: { walletAdd
                     >
                       Details
                     </button>
+                    {group.is_suspended ? (
+                      <button
+                        onClick={() => handleActivate(group.id)}
+                        className="text-green-600 hover:text-green-900"
+                      >
+                        Activate
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleSuspend(group.id)}
+                        className="text-yellow-600 hover:text-yellow-900"
+                      >
+                        Suspend
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDelete(group.id)}
                       className="text-red-600 hover:text-red-900"
@@ -2234,7 +2490,7 @@ function GroupsTab({ walletAddress, data, onRefresh, onPageChange }: { walletAdd
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
+                  <td colSpan={8} className="px-6 py-8 text-center text-sm text-gray-500">
                     No groups found
                   </td>
                 </tr>
@@ -2310,6 +2566,27 @@ function PublishingTab({ walletAddress, data, onRefresh, onPageChange }: { walle
     }
   }
 
+  const handleApprove = async (publishingId: number) => {
+    if (!confirm('Are you sure you want to approve this publishing request?')) return
+    try {
+      await adminApi.approvePublishing(walletAddress, publishingId)
+      onRefresh()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to approve publishing')
+    }
+  }
+
+  const handleReject = async (publishingId: number) => {
+    const reason = prompt('Enter rejection reason (optional):')
+    if (reason === null) return // User cancelled
+    try {
+      await adminApi.rejectPublishing(walletAddress, publishingId, reason || undefined)
+      onRefresh()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to reject publishing')
+    }
+  }
+
   const getStatusBadge = (status: string) => {
     const colors: { [key: string]: string } = {
       published: 'bg-green-100 text-green-800',
@@ -2357,6 +2634,22 @@ function PublishingTab({ walletAddress, data, onRefresh, onPageChange }: { walle
                   {pub.published_at ? new Date(pub.published_at).toLocaleDateString() : '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                  {(pub.status === 'pending_payment' || pub.status === 'draft') && (
+                    <>
+                      <button
+                        onClick={() => handleApprove(pub.id)}
+                        className="text-green-600 hover:text-green-900"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => handleReject(pub.id)}
+                        className="text-red-600 hover:text-red-900"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
                   {pub.status === 'published' && (
                     <button
                       onClick={() => handleSuspend(pub.id)}
@@ -2393,15 +2686,28 @@ function PublishingTab({ walletAddress, data, onRefresh, onPageChange }: { walle
 }
 
 // Revenue Tab
-function RevenueTab({ walletAddress, data, onRefresh: _onRefresh, onPageChange }: { walletAddress: string; data: any; onRefresh: () => void; onPageChange: (page: number) => void }) {
-  const [activeSection, setActiveSection] = useState<'distributions' | 'nft-pools'>('distributions')
+function RevenueTab({ walletAddress, data, onRefresh, onPageChange }: { walletAddress: string; data: any; onRefresh: () => void; onPageChange: (page: number) => void }) {
+  const [activeSection, setActiveSection] = useState<'distributions' | 'nft-pools' | 'infrastructure-payouts'>('distributions')
   const [nftPools, setNftPools] = useState<any>(null)
+  const [infrastructurePayouts, setInfrastructurePayouts] = useState<any>(null)
 
   useEffect(() => {
     if (activeSection === 'nft-pools') {
       adminApi.getNFTRewardPools(walletAddress, 1, 20).then(setNftPools)
+    } else if (activeSection === 'infrastructure-payouts') {
+      adminApi.getInfrastructurePayouts(walletAddress, 1, 20).then(setInfrastructurePayouts)
     }
   }, [activeSection, walletAddress])
+
+  const handleTriggerDistribution = async (distributionId: number) => {
+    if (!confirm('Are you sure you want to trigger this revenue distribution?')) return
+    try {
+      await adminApi.triggerRevenueDistribution(walletAddress, distributionId)
+      onRefresh()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to trigger distribution')
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -2427,6 +2733,16 @@ function RevenueTab({ walletAddress, data, onRefresh: _onRefresh, onPageChange }
           >
             NFT Reward Pools
           </button>
+          <button
+            onClick={() => setActiveSection('infrastructure-payouts')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeSection === 'infrastructure-payouts'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Infrastructure Payouts
+          </button>
         </nav>
       </div>
 
@@ -2446,6 +2762,7 @@ function RevenueTab({ walletAddress, data, onRefresh: _onRefresh, onPageChange }
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Platform Fee</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model Pool</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -2466,10 +2783,20 @@ function RevenueTab({ walletAddress, data, onRefresh: _onRefresh, onPageChange }
                         {dist.is_distributed ? 'Distributed' : 'Pending'}
                       </span>
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      {!dist.is_distributed && (
+                        <button
+                          onClick={() => handleTriggerDistribution(dist.id)}
+                          className="text-blue-600 hover:text-blue-900"
+                        >
+                          Trigger
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
+                    <td colSpan={8} className="px-6 py-8 text-center text-sm text-gray-500">
                       No distributions found
                     </td>
                   </tr>
@@ -2529,6 +2856,65 @@ function RevenueTab({ walletAddress, data, onRefresh: _onRefresh, onPageChange }
           {nftPools.total > nftPools.page_size && (
             <Pagination page={nftPools.page} total={nftPools.total} pageSize={nftPools.page_size} onPageChange={(p) => {
               adminApi.getNFTRewardPools(walletAddress, p, 20).then(setNftPools)
+            }} />
+          )}
+        </div>
+      )}
+
+      {activeSection === 'infrastructure-payouts' && infrastructurePayouts && (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold">Infrastructure Payouts ({infrastructurePayouts.total})</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Investment</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Period</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Paid At</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {infrastructurePayouts.payouts && infrastructurePayouts.payouts.length > 0 ? infrastructurePayouts.payouts.map((payout: any) => (
+                  <tr key={payout.id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{payout.id}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {payout.investment_name || `Investment ${payout.investment_id}`}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {payout.period_year}-{String(payout.period_month).padStart(2, '0')}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${parseFloat(payout.amount).toFixed(2)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 py-1 text-xs rounded-full ${payout.is_paid ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                        {payout.is_paid ? 'Paid' : 'Pending'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {payout.paid_at ? new Date(payout.paid_at).toLocaleDateString() : '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {payout.created_at ? new Date(payout.created_at).toLocaleDateString() : '-'}
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
+                      No infrastructure payouts found
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {infrastructurePayouts.total > infrastructurePayouts.page_size && (
+            <Pagination page={infrastructurePayouts.page} total={infrastructurePayouts.total} pageSize={infrastructurePayouts.page_size} onPageChange={(p) => {
+              adminApi.getInfrastructurePayouts(walletAddress, p, 20).then(setInfrastructurePayouts)
             }} />
           )}
         </div>
@@ -2690,6 +3076,221 @@ function APIUsageTab({ walletAddress, data, onRefresh: _onRefresh, onPageChange 
           <Pagination page={data.page} total={data.total} pageSize={data.page_size} onPageChange={onPageChange} />
         )}
       </div>
+    </div>
+  )
+}
+
+// Experiments Tab
+function ExperimentsTab({ data, onPageChange }: { walletAddress: string; data: any; onRefresh: () => void; onPageChange: (page: number) => void }) {
+  return (
+    <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-200">
+        <h2 className="text-lg font-semibold">Experiments ({data.total})</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Runs</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {data.experiments && data.experiments.length > 0 ? data.experiments.map((exp: any) => (
+              <tr key={exp.id}>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{exp.id}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{exp.name}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{exp.model_id}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <span className={`px-2 py-1 text-xs rounded-full ${
+                    exp.status === 'active' ? 'bg-green-100 text-green-800' :
+                    exp.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {exp.status}
+                  </span>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{exp.run_count || 0}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {new Date(exp.created_at).toLocaleDateString()}
+                </td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={6} className="px-6 py-8 text-center text-sm text-gray-500">
+                  No experiments found
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {data.total > data.page_size && (
+        <Pagination page={data.page} total={data.total} pageSize={data.page_size} onPageChange={onPageChange} />
+      )}
+    </div>
+  )
+}
+
+// Workspace Tab
+function WorkspaceTab({ data, onPageChange }: { walletAddress: string; data: any; onRefresh: () => void; onPageChange: (page: number) => void }) {
+  return (
+    <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-200">
+        <h2 className="text-lg font-semibold">Workspace Projects ({data.total})</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Group ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tasks</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Completed</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {data.projects && data.projects.length > 0 ? data.projects.map((project: any) => (
+              <tr key={project.id}>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{project.id}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.name}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.group_id}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <span className={`px-2 py-1 text-xs rounded-full ${
+                    project.status === 'active' ? 'bg-green-100 text-green-800' :
+                    project.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {project.status}
+                  </span>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.task_count || 0}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.completed_tasks || 0}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {new Date(project.created_at).toLocaleDateString()}
+                </td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
+                  No projects found
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {data.total > data.page_size && (
+        <Pagination page={data.page} total={data.total} pageSize={data.page_size} onPageChange={onPageChange} />
+      )}
+    </div>
+  )
+}
+
+// Encryption Tab
+function EncryptionTab({ walletAddress, data }: { walletAddress: string; data: any; onRefresh: () => void }) {
+  const [keyDetails, setKeyDetails] = useState<any>(null)
+
+  const handleViewKey = async (groupId: number) => {
+    try {
+      const details = await adminApi.getGroupEncryptionKey(walletAddress, groupId)
+      setKeyDetails(details)
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to load encryption key details')
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-lg font-semibold">Encryption Keys ({data.total || 0})</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Group ID</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Group Name</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User Keys</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {data.encryption_keys && data.encryption_keys.length > 0 ? data.encryption_keys.map((key: any) => (
+                <tr key={key.id}>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{key.id}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{key.group_id}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{key.group_name || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{key.user_count || 0}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {key.created_at ? new Date(key.created_at).toLocaleDateString() : 'N/A'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <button
+                      onClick={() => handleViewKey(key.group_id)}
+                      className="text-blue-600 hover:text-blue-900"
+                    >
+                      View Details
+                    </button>
+                  </td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={6} className="px-6 py-8 text-center text-sm text-gray-500">
+                    No encryption keys found
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {keyDetails && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">Encryption Key Details: Group {keyDetails.group_id}</h3>
+            <button
+              onClick={() => {
+                setKeyDetails(null)
+              }}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="space-y-4">
+            <div>
+              <h4 className="font-medium mb-2">Group Information</h4>
+              <div className="space-y-1 text-sm">
+                <div>Group ID: {keyDetails.group_id}</div>
+                <div>Group Name: {keyDetails.group_name}</div>
+                <div>Has Encryption: {keyDetails.has_encryption ? 'Yes' : 'No'}</div>
+              </div>
+            </div>
+            {keyDetails.has_encryption && (
+              <div>
+                <h4 className="font-medium mb-2">Key Information</h4>
+                <div className="space-y-1 text-sm">
+                  <div>Key Hash: <code className="bg-gray-100 px-2 py-1 rounded">{keyDetails.key_hash}</code></div>
+                  <div>User Keys Count: {keyDetails.user_keys_count}</div>
+                  <div className="text-xs text-gray-500 mt-2">{keyDetails.message}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
